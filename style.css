@@ -57,7 +57,9 @@ main { flex: 1; overflow-y: auto; padding: 0 16px; }
 .original { color: var(--muted); margin: 0 0 6px; font-size: 16px; }
 .translated { font-size: 26px; line-height: 1.35; margin: 0 0 4px; font-weight: 600; }
 .translit { font-size: 15px; color: var(--accent); margin: 0; font-style: italic; }
-.original:empty, .translated:empty, .translit:empty { display: none; }
+.meaning { font-size: 15px; color: var(--muted); margin: 6px 0 0; }
+.meaning::before { content: "Meaning: "; font-weight: 600; }
+.original:empty, .translated:empty, .translit:empty, .meaning:empty { display: none; }
 
 .tabs { display: flex; gap: 8px; margin: 14px 0 8px; }
 .tab {

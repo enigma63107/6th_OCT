@@ -13,6 +13,11 @@ translation as they talk, with the Gujarati also written in English letters
 - **Speak aloud** (🔊): reads the Gujarati out loud if your iPhone has a Gujarati voice.
 - **Type to translate**: for when you want to check something yourself.
 - The speaker's language can be English, Hindi, Marathi or Gujarati. The output can be Gujarati, English or Hindi.
+- **When they speak Gujarati**, you see their words in Gujarati, the English-letter version,
+  and the English meaning.
+
+Pick the speaker's language before you start. Speech recognition listens for one
+language at a time, so it can't detect which one is being spoken.
 
 ## Putting it on your iPhone
 

@@ -5,7 +5,8 @@
   const els = {
     sourceLang: $('sourceLang'), targetLang: $('targetLang'),
     live: $('live'), hint: $('hint'),
-    liveOriginal: $('liveOriginal'), liveTranslated: $('liveTranslated'), liveTranslit: $('liveTranslit'),
+    liveOriginal: $('liveOriginal'), liveTranslated: $('liveTranslated'),
+    liveTranslit: $('liveTranslit'), liveMeaning: $('liveMeaning'),
     history: $('history'), saved: $('saved'),
     micBtn: $('micBtn'), clearBtn: $('clearBtn'), speakToggle: $('speakToggle'),
     typeForm: $('typeForm'), typeInput: $('typeInput'), status: $('status'),
@@ -69,10 +70,8 @@
     return data.responseData.translatedText;
   }
 
-  async function translate(text, signal) {
+  async function translate(text, signal, tl) {
     const sl = els.sourceLang.value.split('-')[0];
-    const tl = els.targetLang.value;
-    if (sl === tl) return text;
     const key = `${sl}|${tl}|${text}`;
     if (cache.has(key)) return cache.get(key);
     let result;
@@ -88,6 +87,27 @@
 
   function romanize(text) {
     return els.targetLang.value === 'gu' ? window.transliterateGujarati(text) : '';
+  }
+
+  // Turns what was heard into the lines a card shows.
+  async function process(heard, signal) {
+    const sl = els.sourceLang.value.split('-')[0];
+    const tl = els.targetLang.value;
+    if (sl === tl) {
+      // They speak the language you're learning: show their words as heard,
+      // plus the English meaning so you know what they said.
+      const meaning = sl === 'en' ? '' : await translate(heard, signal, 'en');
+      return { original: '', translated: heard, translit: romanize(heard), meaning };
+    }
+    const translated = await translate(heard, signal, tl);
+    return { original: heard, translated, translit: romanize(translated), meaning: '' };
+  }
+
+  function fillLive(lines) {
+    els.liveOriginal.textContent = lines.original;
+    els.liveTranslated.textContent = lines.translated;
+    els.liveTranslit.textContent = lines.translit;
+    els.liveMeaning.textContent = lines.meaning;
   }
 
   // ---- speaking translations aloud ----
@@ -119,10 +139,9 @@
       liveAbort?.abort();
       liveAbort = new AbortController();
       try {
-        const t = await translate(original, liveAbort.signal);
+        const lines = await process(original, liveAbort.signal);
         if (original !== liveText) return; // a newer partial sentence arrived
-        els.liveTranslated.textContent = t;
-        els.liveTranslit.textContent = romanize(t);
+        fillLive(lines);
       } catch (err) {
         if (err.name !== 'AbortError') setStatus('Translation failed. Check your internet connection.', true);
       }
@@ -133,9 +152,7 @@
     clearTimeout(liveTimer);
     liveAbort?.abort();
     liveText = '';
-    els.liveOriginal.textContent = '';
-    els.liveTranslated.textContent = '';
-    els.liveTranslit.textContent = '';
+    fillLive({ original: '', translated: '', translit: '', meaning: '' });
   }
 
   // ---- finished sentences ----
@@ -143,22 +160,19 @@
     original = original.trim();
     if (!original) return;
     try {
-      const translated = await translate(original);
       const entry = {
         id: Date.now() + Math.random().toString(36).slice(2, 6),
-        original, translated, translit: romanize(translated),
+        ...(await process(original)),
       };
       state.history.unshift(entry);
       state.history.length = Math.min(state.history.length, HISTORY_LIMIT);
       save('lg.history', state.history);
       render();
       // Keep the finished sentence visible in the live panel until the next one starts.
-      els.liveOriginal.textContent = entry.original;
-      els.liveTranslated.textContent = entry.translated;
-      els.liveTranslit.textContent = entry.translit;
+      fillLive(entry);
       liveText = '';
       setStatus('');
-      speak(translated);
+      speak(entry.translated);
     } catch {
       setStatus('Translation failed. Check your internet connection.', true);
     }
@@ -214,7 +228,7 @@
       starBtn.setAttribute('aria-label', 'Save phrase');
       starBtn.onclick = () => toggleSaved(entry);
       actions.append(sayBtn, starBtn);
-      li.append(p('original', entry.original), p('translated', entry.translated), p('translit', entry.translit), actions);
+      li.append(p('original', entry.original), p('translated', entry.translated), p('translit', entry.translit), p('meaning', entry.meaning || ''), actions);
       listEl.append(li);
     }
   }
@@ -275,7 +289,9 @@
 
     rec.onerror = (e) => {
       if (e.error === 'no-speech' || e.error === 'aborted') return;
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      if (e.error === 'language-not-supported') {
+        setStatus(`This iPhone can't recognise ${els.sourceLang.selectedOptions[0].text} speech. Try another language.`, true);
+      } else if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
         setStatus('Microphone or speech recognition is blocked. Allow it in Settings → Safari, then try again.', true);
       } else {
         setStatus(`Speech recognition error: ${e.error}`, true);
