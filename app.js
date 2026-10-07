@@ -10,6 +10,8 @@
     history: $('history'), saved: $('saved'),
     micBtn: $('micBtn'), clearBtn: $('clearBtn'), speakToggle: $('speakToggle'),
     typeForm: $('typeForm'), typeInput: $('typeInput'), status: $('status'),
+    setupBtn: $('setupBtn'), setup: $('setup'), keyForm: $('keyForm'), keyInput: $('keyInput'),
+    keyState: $('keyState'),
   };
 
   // iOS Safari often never marks a result final while the mic stays open,
@@ -43,6 +45,14 @@
     });
   }
 
+  function groqKey() { return load('lg.groqKey', '') || ''; }
+
+  // 'auto' when the speaker mixes languages, otherwise a code like 'hi'.
+  function sourceCode() {
+    const v = els.sourceLang.value;
+    return v === 'auto' ? 'auto' : v.split('-')[0];
+  }
+
   function setStatus(msg, isError) {
     els.status.textContent = msg || '';
     els.status.classList.toggle('error', !!isError);
@@ -57,7 +67,8 @@
     const res = await fetch(url, { signal });
     if (!res.ok) throw new Error(`Google ${res.status}`);
     const data = await res.json();
-    return data[0].map((part) => part[0]).join('');
+    // data[2] is the language Google detected, which matters for mixed speech.
+    return { text: data[0].map((part) => part[0]).join(''), detected: data[2] || sl };
   }
 
   async function myMemory(text, sl, tl, signal) {
@@ -70,16 +81,16 @@
     return data.responseData.translatedText;
   }
 
-  async function translate(text, signal, tl) {
-    const sl = els.sourceLang.value.split('-')[0];
+  async function translate(text, signal, tl, sl = sourceCode()) {
     const key = `${sl}|${tl}|${text}`;
     if (cache.has(key)) return cache.get(key);
     let result;
     try {
       result = await googleFree(text, sl, tl, signal);
     } catch (err) {
-      if (err.name === 'AbortError') throw err;
-      result = await myMemory(text, sl, tl, signal);
+      // MyMemory can't detect languages, so it only helps when the source is known.
+      if (err.name === 'AbortError' || sl === 'auto') throw err;
+      result = { text: await myMemory(text, sl, tl, signal), detected: sl };
     }
     cache.set(key, result);
     return result;
@@ -91,16 +102,16 @@
 
   // Turns what was heard into the lines a card shows.
   async function process(heard, signal) {
-    const sl = els.sourceLang.value.split('-')[0];
+    const sl = sourceCode();
     const tl = els.targetLang.value;
-    if (sl === tl) {
-      // They speak the language you're learning: show their words as heard,
+    const result = sl === tl ? { text: heard, detected: tl } : await translate(heard, signal, tl);
+    if (result.detected === tl) {
+      // They spoke the language you're learning: show their words as heard,
       // plus the English meaning so you know what they said.
-      const meaning = sl === 'en' ? '' : await translate(heard, signal, 'en');
+      const meaning = tl === 'en' ? '' : (await translate(heard, signal, 'en', tl)).text;
       return { original: '', translated: heard, translit: romanize(heard), meaning };
     }
-    const translated = await translate(heard, signal, tl);
-    return { original: heard, translated, translit: romanize(translated), meaning: '' };
+    return { original: heard, translated: result.text, translit: romanize(result.text), meaning: '' };
   }
 
   function fillLive(lines) {
@@ -169,6 +180,7 @@
       save('lg.history', state.history);
       render();
       // Keep the finished sentence visible in the live panel until the next one starts.
+      els.hint.hidden = true;
       fillLive(entry);
       liveText = '';
       setStatus('');
@@ -241,7 +253,43 @@
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === state.tab));
   }
 
-  // ---- speech recognition ----
+  // ---- listening with Groq (handles mixed languages) ----
+  let groq = null;
+  let hearing = false;
+
+  function startGroq() {
+    hearing = false;
+    groq = window.createGroqListener({
+      getKey: groqKey,
+      getLanguage: () => (sourceCode() === 'auto' ? '' : sourceCode()),
+      onPhrase: (text) => commit(text),
+      onLevel: (voice) => {
+        if (voice === hearing) return;
+        hearing = voice;
+        if (voice) setStatus('Hearing speech…');
+      },
+      onState: (s) => {
+        if (!listening) return;
+        setStatus(s === 'transcribing' ? 'Translating…' : 'Listening…');
+      },
+      onError: (err) => {
+        if (err.status === 401) {
+          setStatus('Groq didn\'t accept your key. Check it under Setup.', true);
+          stopListening();
+        } else if (err.status === 429) {
+          setStatus('Free Groq limit reached for now. Wait a minute and it will carry on.', true);
+        } else {
+          setStatus('Couldn\'t reach Groq. Check your internet connection.', true);
+        }
+      },
+    });
+    groq.start().catch(() => {
+      setStatus('The microphone is blocked. Allow it in Settings → Safari → Microphone, then try again.', true);
+      stopListening();
+    });
+  }
+
+  // ---- listening with Safari's built-in recognition (one language) ----
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let rec = null;
   let listening = false;
@@ -311,7 +359,13 @@
   }
 
   function startListening() {
-    if (!SpeechRecognition) {
+    const useGroq = !!groqKey();
+    if (!useGroq && els.sourceLang.value === 'auto') {
+      setStatus('Mixed languages need a free Groq key. Add one under Setup.', true);
+      showSetup(true);
+      return;
+    }
+    if (!useGroq && !SpeechRecognition) {
       setStatus('This browser has no speech recognition. On iPhone, open this page in Safari.', true);
       return;
     }
@@ -322,8 +376,8 @@
     resetLive();
     els.hint.hidden = false;
     els.hint.textContent = 'Listening…';
-    setStatus('');
-    startRecognition();
+    setStatus(useGroq ? 'Listening…' : '');
+    if (useGroq) startGroq(); else startRecognition();
   }
 
   function stopListening() {
@@ -331,11 +385,36 @@
     els.micBtn.classList.remove('on');
     els.micBtn.setAttribute('aria-label', 'Start listening');
     els.live.classList.remove('listening');
+    if (groq) {
+      groq.stop();
+      groq = null;
+      setStatus('');
+      return;
+    }
     flushPending();
     try { rec?.stop(); } catch { /* already stopped */ }
   }
 
+  // ---- setup ----
+  function showSetup(open) {
+    els.setup.hidden = !open;
+    const key = groqKey();
+    els.keyState.textContent = key
+      ? `Key saved (ends in …${key.slice(-4)}). Mixed-language listening is on.`
+      : 'No key yet. Without one, the app uses Safari\'s listening, which only understands one language at a time.';
+  }
+
   // ---- wiring ----
+  els.setupBtn.onclick = () => showSetup(els.setup.hidden);
+  els.keyForm.onsubmit = (e) => {
+    e.preventDefault();
+    const key = els.keyInput.value.trim();
+    els.keyInput.value = '';
+    save('lg.groqKey', key);
+    setStatus(key ? 'Key saved. Tap the mic to start.' : 'Key removed.');
+    showSetup(!key);
+  };
+
   els.micBtn.onclick = () => (listening ? stopListening() : startListening());
 
   els.sourceLang.onchange = () => {

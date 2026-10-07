@@ -14,10 +14,14 @@
 </head>
 <body>
   <header>
-    <h1>Live Gujarati</h1>
+    <div class="title-row">
+      <h1>Live Gujarati</h1>
+      <button id="setupBtn" class="link setup-btn">Setup</button>
+    </div>
     <div class="langs">
       <label>They speak
         <select id="sourceLang">
+          <option value="auto">Mixed: English, Hindi, Gujarati</option>
           <option value="en-US">English (US)</option>
           <option value="en-IN">English (India)</option>
           <option value="en-GB">English (UK)</option>
@@ -38,6 +42,18 @@
   </header>
 
   <main>
+    <section id="setup" class="card setup" hidden>
+      <h2>Mixed-language listening</h2>
+      <p>To understand English, Hindi and Gujarati mixed together, the app uses Groq's free speech AI.
+        Get a free key at <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>
+        and paste it here. It's stored only on this phone.</p>
+      <form id="keyForm" class="type-form">
+        <input id="keyInput" type="password" placeholder="gsk_…" autocomplete="off" aria-label="Groq API key">
+        <button type="submit">Save</button>
+      </form>
+      <p id="keyState" class="small"></p>
+    </section>
+
     <section id="live" class="card live" aria-live="polite">
       <p class="hint" id="hint">Tap the mic and hold your phone towards the person speaking.</p>
       <p class="original" id="liveOriginal"></p>
@@ -70,6 +86,7 @@
   </footer>
 
   <script src="translit.js"></script>
+  <script src="listen-groq.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

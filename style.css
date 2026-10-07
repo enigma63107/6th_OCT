@@ -31,11 +31,18 @@ body {
   padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
 }
 header { padding: 12px 16px 8px; }
-h1 { font-size: 20px; margin: 0 0 8px; }
+h1 { font-size: 20px; margin: 0; }
+.title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.setup-btn { width: auto; padding: 4px 0; }
+.setup { margin-bottom: 12px; }
+.setup h2 { font-size: 17px; margin: 0 0 6px; }
+.setup p { margin: 0 0 10px; font-size: 14px; line-height: 1.45; }
+.setup a { color: var(--accent); }
+.small { font-size: 13px; color: var(--muted); }
 .langs { display: flex; align-items: end; gap: 8px; }
 .langs label { flex: 1; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
 .arrow { padding-bottom: 8px; color: var(--muted); }
-select, input[type=text] {
+select, input[type=text], input[type=password] {
   font-size: 16px; /* 16px stops iOS from zooming in on focus */
   padding: 8px;
   border-radius: 10px;

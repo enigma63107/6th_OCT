@@ -16,8 +16,20 @@ translation as they talk, with the Gujarati also written in English letters
 - **When they speak Gujarati**, you see their words in Gujarati, the English-letter version,
   and the English meaning.
 
-Pick the speaker's language before you start. Speech recognition listens for one
-language at a time, so it can't detect which one is being spoken.
+## Mixed languages (English + Hindi + Gujarati)
+
+Choose **Mixed** as the speaker's language. This uses Groq's free Whisper speech AI,
+which understands speech that switches between languages:
+
+1. Sign up at [console.groq.com](https://console.groq.com) (free, no card needed).
+2. Go to **API Keys → Create API Key** and copy it (it starts with `gsk_`).
+3. In the app, tap **Setup**, paste the key and tap **Save**. The key stays on your phone.
+
+The app cuts the audio at each pause and sends that phrase to Groq. Text shows up a
+second or two after each phrase. The free plan allows about 20 phrases a minute.
+
+Without a key, the app uses Safari's built-in listening. That only understands the one
+language you pick, and it needs **Settings → General → Keyboard → Enable Dictation** on.
 
 ## Putting it on your iPhone
 
@@ -38,7 +50,7 @@ Older iOS versions only allow speech recognition inside Safari itself.
 
 | Step | What does it |
 | --- | --- |
-| Speech → text | Safari's built-in speech recognition (Apple's, the same as dictation) |
+| Speech → text | Groq's Whisper (`listen-groq.js`) with a key, otherwise Safari's built-in recognition |
 | Text → Gujarati | Google Translate's free web endpoint, falling back to MyMemory |
 | Gujarati → English letters | `translit.js`, which runs on the phone |
 | Read aloud | The iPhone's built-in voices |
@@ -49,5 +61,6 @@ It needs an internet connection. Everything is plain HTML/CSS/JS, with no build 
 
 - `index.html`: page layout
 - `style.css`: styling (light and dark mode)
-- `app.js`: listening, live translation, conversation log, saved phrases
+- `app.js`: live translation, conversation log, saved phrases, Safari listening
+- `listen-groq.js`: mic recording, pause detection, Groq transcription
 - `translit.js`: Gujarati → English letters
