@@ -24,13 +24,12 @@ language at a time, so it can't detect which one is being spoken.
 The microphone only works over `https://`, so the app needs to be hosted. The
 easiest free option is GitHub Pages:
 
-1. Merge this branch into `main`.
-2. On GitHub, open the repo → **Settings → Pages**. Under *Build and deployment*,
-   pick **Deploy from a branch**, then choose `main` and `/ (root)`, and save.
-   (On a free GitHub account, Pages needs the repo to be public.)
-3. After a minute or so, open `https://enigma63107.github.io/6th_OCT/` in **Safari** on your iPhone.
-4. Tap the Share button → **Add to Home Screen** so it opens like an app.
-5. Tap the mic. Allow the microphone and speech recognition when iPhone asks.
+1. On GitHub, open the repo → **Settings → Pages**. Under *Build and deployment*,
+   pick **Deploy from a branch**, then choose the branch that has these files and
+   `/ (root)`, and save. (On a free GitHub account, Pages needs the repo to be public.)
+2. After a minute or so, open `https://enigma63107.github.io/6th_OCT/` in **Safari** on your iPhone.
+3. Tap the Share button → **Add to Home Screen** so it opens like an app.
+4. Tap the mic. Allow the microphone and speech recognition when iPhone asks.
 
 If the mic doesn't work from the home-screen icon, open the same link in Safari.
 Older iOS versions only allow speech recognition inside Safari itself.
