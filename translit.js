@@ -79,6 +79,20 @@
     return out;
   }
 
+  // Whisper sometimes writes Gujarati speech in Hindi (Devanagari) letters.
+  // The two scripts share a layout, so each letter maps across by a fixed offset.
+  function toGujaratiScript(text) {
+    let out = '';
+    for (const ch of text) {
+      const c = ch.codePointAt(0);
+      if (c === 0x0964 || c === 0x0965) out += '.'; // danda
+      else if (c >= 0x0900 && c <= 0x097F) out += String.fromCodePoint(c + 0x180);
+      else out += ch;
+    }
+    return out;
+  }
+
   root.transliterateGujarati = transliterate;
-  if (typeof module !== 'undefined') module.exports = { transliterate };
+  root.toGujaratiScript = toGujaratiScript;
+  if (typeof module !== 'undefined') module.exports = { transliterate, toGujaratiScript };
 })(typeof window !== 'undefined' ? window : globalThis);

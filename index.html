@@ -6,6 +6,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Live Gujarati">
   <meta name="theme-color" content="#0f766e">
+  <!-- Google's read-aloud voice refuses requests that carry another site's address. -->
+  <meta name="referrer" content="no-referrer">
   <title>Live Gujarati</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -16,74 +18,85 @@
   <header>
     <div class="title-row">
       <h1>Live Gujarati</h1>
-      <button id="setupBtn" class="link setup-btn">Setup</button>
+      <button id="setupBtn" class="link">Setup</button>
     </div>
-    <div class="langs">
-      <label>They speak
+    <div class="settings-row">
+      <label class="field">They speak
         <select id="sourceLang">
+          <option value="auto">Any language</option>
           <option value="en-IN">English</option>
           <option value="hi-IN">Hindi</option>
           <option value="gu-IN">Gujarati</option>
-          <option value="mr-IN">Marathi</option>
-          <option value="auto">Mixed (needs Groq key)</option>
         </select>
       </label>
-      <span class="arrow">→</span>
-      <label>Show me
-        <select id="targetLang">
-          <option value="gu">Gujarati</option>
-          <option value="en">English</option>
-          <option value="hi">Hindi</option>
-        </select>
-      </label>
+      <label class="toggle"><input type="checkbox" id="speakToggle"> Speak aloud</label>
     </div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="chat">Conversation</button>
+      <button class="tab" data-tab="saved">Saved phrases</button>
+    </nav>
   </header>
 
-  <main>
+  <main id="scroller">
     <section id="setup" class="card setup" hidden>
-      <h2>Mixed-language listening</h2>
-      <p>To understand English, Hindi and Gujarati mixed together, the app uses Groq's free speech AI.
+      <h2>Groq key</h2>
+      <p>The app uses Groq's free speech AI to understand English, Hindi and Gujarati.
         Get a free key at <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>
         and paste it here. It's stored only on this phone.</p>
-      <form id="keyForm" class="type-form">
+      <form id="keyForm" class="row-form">
         <input id="keyInput" type="password" placeholder="gsk_…" autocomplete="off" aria-label="Groq API key">
         <button type="submit">Save</button>
       </form>
       <p id="keyState" class="small"></p>
     </section>
 
-    <section id="live" class="card live" aria-live="polite">
-      <p class="hint" id="hint">Tap the mic and hold your phone towards the person speaking.</p>
-      <p class="original" id="liveOriginal"></p>
-      <p class="translated" id="liveTranslated" lang="gu"></p>
-      <p class="translit" id="liveTranslit"></p>
-      <p class="meaning" id="liveMeaning"></p>
-    </section>
-
-    <nav class="tabs">
-      <button class="tab active" data-tab="history">Conversation</button>
-      <button class="tab" data-tab="saved">Saved phrases</button>
-    </nav>
-    <ol id="history" class="list"></ol>
-    <ol id="saved" class="list" hidden></ol>
+    <div id="empty" class="empty">
+      <p><strong>How it works</strong></p>
+      <ol>
+        <li>Tap <strong>Listen to them</strong>. You'll see and hear what the other person says in Gujarati.</li>
+        <li><strong>Hold the green button</strong> and reply in Hindi or English. The app shows and says the Gujarati.</li>
+        <li><strong>Hold it again</strong> and say that sentence in Gujarati. You'll get a score.</li>
+      </ol>
+      <p class="small">Earphones help: the other person won't hear the app, and it won't hear itself.</p>
+    </div>
+    <ol id="chat" class="chat"></ol>
+    <ol id="saved" class="chat" hidden></ol>
   </main>
 
   <footer>
-    <form id="typeForm" class="type-form">
-      <input id="typeInput" type="text" placeholder="Or type something to translate…" autocomplete="off">
-      <button type="submit">Go</button>
-    </form>
+    <section id="coach" class="coach" hidden>
+      <div class="coach-text">
+        <p class="coach-label">Now say it in Gujarati</p>
+        <p class="coach-gu" id="coachGu" lang="gu"></p>
+        <p class="translit" id="coachTranslit"></p>
+      </div>
+      <div class="coach-actions">
+        <button id="coachSay" aria-label="Play the Gujarati">🔊</button>
+        <button id="coachSkip" class="link">Skip</button>
+      </div>
+    </section>
+
     <div class="controls">
-      <label class="toggle"><input type="checkbox" id="speakToggle"> Speak aloud</label>
-      <button id="micBtn" class="mic" aria-label="Start listening">
-        <svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V22h2v-3.08A7 7 0 0 0 19 12h-2Z"/></svg>
+      <button id="listenBtn" class="listen-btn">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 3a9 9 0 0 0-9 9v5a3 3 0 0 0 3 3h1a1 1 0 0 0 1-1v-6a1 1 0 0 0-1-1H5a7 7 0 0 1 14 0h-2a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h1a3 3 0 0 0 3-3v-5a9 9 0 0 0-9-9Z"/></svg>
+        <span id="listenLabel">Listen to them</span>
       </button>
-      <button id="clearBtn" class="link">Clear</button>
+      <button id="meBtn" class="me-btn">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V22h2v-3.08A7 7 0 0 0 19 12h-2Z"/></svg>
+        <span id="meLabel">Hold: your reply</span>
+      </button>
     </div>
-    <p id="status" class="status"></p>
+    <p id="status" class="status" role="status"></p>
+    <form id="typeForm" class="row-form">
+      <input id="typeInput" type="text" placeholder="Or type your reply…" autocomplete="off" aria-label="Type your reply">
+      <button type="submit">Go</button>
+      <button type="button" id="clearBtn" class="link">Clear</button>
+    </form>
   </footer>
 
   <script src="translit.js"></script>
+  <script src="practice.js"></script>
+  <script src="speak.js"></script>
   <script src="listen-groq.js"></script>
   <script src="app.js"></script>
 </body>

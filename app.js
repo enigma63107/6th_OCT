@@ -1,24 +1,27 @@
-// Live Gujarati: listens to speech, shows a running translation while the
-// person talks, and keeps each finished sentence in a conversation log.
+// Live Gujarati: a conversation coach for learning Gujarati.
+//
+//  - Them: tap Listen. Whatever they say is translated and read aloud
+//    (Gujarati if they spoke Hindi/English, the English meaning if they
+//    spoke Gujarati).
+//  - You: hold the button and reply in Hindi or English. The app shows and
+//    says the Gujarati for it.
+//  - Practice: hold the button again and say it in Gujarati. The app scores
+//    how close you got.
 (function () {
   const $ = (id) => document.getElementById(id);
   const els = {
-    sourceLang: $('sourceLang'), targetLang: $('targetLang'),
-    live: $('live'), hint: $('hint'),
-    liveOriginal: $('liveOriginal'), liveTranslated: $('liveTranslated'),
-    liveTranslit: $('liveTranslit'), liveMeaning: $('liveMeaning'),
-    history: $('history'), saved: $('saved'),
-    micBtn: $('micBtn'), clearBtn: $('clearBtn'), speakToggle: $('speakToggle'),
-    typeForm: $('typeForm'), typeInput: $('typeInput'), status: $('status'),
+    sourceLang: $('sourceLang'), speakToggle: $('speakToggle'),
     setupBtn: $('setupBtn'), setup: $('setup'), keyForm: $('keyForm'), keyInput: $('keyInput'),
     keyState: $('keyState'),
+    scroller: $('scroller'), chat: $('chat'), saved: $('saved'), empty: $('empty'),
+    coach: $('coach'), coachGu: $('coachGu'), coachTranslit: $('coachTranslit'),
+    coachSay: $('coachSay'), coachSkip: $('coachSkip'),
+    listenBtn: $('listenBtn'), listenLabel: $('listenLabel'), meBtn: $('meBtn'), meLabel: $('meLabel'),
+    typeForm: $('typeForm'), typeInput: $('typeInput'), status: $('status'), clearBtn: $('clearBtn'),
   };
 
-  // iOS Safari often never marks a result final while the mic stays open,
-  // so a pause this long ends the sentence ourselves.
-  const SILENCE_MS = 1500;
-  const LIVE_TRANSLATE_DEBOUNCE_MS = 350;
-  const HISTORY_LIMIT = 200;
+  const HISTORY_LIMIT = 300;
+  const PASS_SCORE = 75;
 
   // ---- storage (per device; failures are harmless) ----
   function load(key, fallback) {
@@ -28,371 +31,373 @@
     try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* private mode */ }
   }
 
+  // Saved phrases from the first version used different field names.
+  function fromOldSaved(s) {
+    if (s.gu) return s;
+    return { id: s.id, gu: s.translated, translit: s.translit, heard: s.original || '', meaning: s.meaning || '' };
+  }
+
   const state = {
-    history: load('lg.history', []),
-    saved: load('lg.saved', []),
-    tab: 'history',
+    chat: load('lg.chat', []),
+    saved: load('lg.saved', []).map(fromOldSaved),
+    target: load('lg.target', null), // the Gujarati sentence you're practising
+    tab: 'chat',
+    listening: false, // listening for the other person
+    holding: false,   // you're holding the button and talking
   };
   const prefs = load('lg.prefs', {});
-  if (prefs.sourceLang) els.sourceLang.value = prefs.sourceLang;
-  if (prefs.targetLang) els.targetLang.value = prefs.targetLang;
-  els.speakToggle.checked = !!prefs.speak;
+  if ([...els.sourceLang.options].some((o) => o.value === prefs.sourceLang)) {
+    els.sourceLang.value = prefs.sourceLang;
+  }
+  els.speakToggle.checked = prefs.speak ?? true;
   function savePrefs() {
-    save('lg.prefs', {
-      sourceLang: els.sourceLang.value,
-      targetLang: els.targetLang.value,
-      speak: els.speakToggle.checked,
-    });
+    save('lg.prefs', { sourceLang: els.sourceLang.value, speak: els.speakToggle.checked });
   }
 
   function groqKey() { return load('lg.groqKey', '') || ''; }
-
-  // 'auto' when the speaker mixes languages, otherwise a code like 'hi'.
-  function sourceCode() {
-    const v = els.sourceLang.value;
-    return v === 'auto' ? 'auto' : v.split('-')[0];
-  }
 
   function setStatus(msg, isError) {
     els.status.textContent = msg || '';
     els.status.classList.toggle('error', !!isError);
   }
 
-  // ---- translation ----
+  // ---- translation (Google's free endpoint, MyMemory as backup) ----
   const cache = new Map();
 
-  async function googleFree(text, sl, tl, signal) {
+  async function googleFree(text, sl, tl) {
     const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&dt=t'
       + `&sl=${encodeURIComponent(sl)}&tl=${encodeURIComponent(tl)}&q=${encodeURIComponent(text)}`;
-    const res = await fetch(url, { signal });
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`Google ${res.status}`);
     const data = await res.json();
-    // data[2] is the language Google detected, which matters for mixed speech.
+    // data[2] is the language Google detected.
     return { text: data[0].map((part) => part[0]).join(''), detected: data[2] || sl };
   }
 
-  async function myMemory(text, sl, tl, signal) {
+  async function myMemory(text, sl, tl) {
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}`
       + `&langpair=${encodeURIComponent(sl)}|${encodeURIComponent(tl)}`;
-    const res = await fetch(url, { signal });
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`MyMemory ${res.status}`);
     const data = await res.json();
     if (data.responseStatus !== 200) throw new Error(data.responseDetails || 'MyMemory error');
     return data.responseData.translatedText;
   }
 
-  async function translate(text, signal, tl, sl = sourceCode()) {
+  async function translate(text, tl, sl = 'auto') {
     const key = `${sl}|${tl}|${text}`;
     if (cache.has(key)) return cache.get(key);
     let result;
     try {
-      result = await googleFree(text, sl, tl, signal);
+      result = await googleFree(text, sl, tl);
     } catch (err) {
       // MyMemory can't detect languages, so it only helps when the source is known.
-      if (err.name === 'AbortError' || sl === 'auto') throw err;
-      result = { text: await myMemory(text, sl, tl, signal), detected: sl };
+      if (sl === 'auto') throw err;
+      result = { text: await myMemory(text, sl, tl), detected: sl };
     }
     cache.set(key, result);
     return result;
   }
 
-  function romanize(text) {
-    return els.targetLang.value === 'gu' ? window.transliterateGujarati(text) : '';
+  // The other person's language as chosen in the menu: 'auto' or e.g. 'hi'.
+  function theirLanguage() {
+    const v = els.sourceLang.value;
+    return v === 'auto' ? 'auto' : v.split('-')[0];
   }
 
-  // Turns what was heard into the lines a card shows.
-  async function process(heard, signal) {
-    const sl = sourceCode();
-    const tl = els.targetLang.value;
-    const result = sl === tl ? { text: heard, detected: tl } : await translate(heard, signal, tl);
-    if (result.detected === tl) {
-      // They spoke the language you're learning: show their words as heard,
-      // plus the English meaning so you know what they said.
-      const meaning = tl === 'en' ? '' : (await translate(heard, signal, 'en', tl)).text;
-      return { original: '', translated: heard, translit: romanize(heard), meaning };
+  const romanize = (gu) => window.transliterateGujarati(gu);
+
+  // ---- reading aloud ----
+  const speaker = window.createSpeaker();
+
+  function say(text, lang) {
+    if (!els.speakToggle.checked) return;
+    speaker.say(text, lang).catch((err) => setStatus(err.message, true));
+  }
+
+  function play(text, lang) {
+    speaker.unlock();
+    speaker.say(text, lang).catch((err) => setStatus(err.message, true));
+  }
+
+  // ---- what happens with each phrase ----
+  // Phrases are handled one at a time so they appear in the order spoken.
+  let pipeline = Promise.resolve();
+  function handle(text, who) {
+    text = text.trim();
+    if (!text) return;
+    pipeline = pipeline
+      .then(() => handleNow(text, who))
+      .catch(() => setStatus('Translation failed. Check your internet connection.', true));
+  }
+
+  async function handleNow(text, who) {
+    let entry;
+    if (who === 'them') {
+      const result = await translate(text, 'gu', theirLanguage());
+      if (result.detected === 'gu') {
+        const meaning = (await translate(text, 'en', 'gu')).text;
+        entry = { who, heard: text, gu: text, translit: romanize(text), meaning };
+        say(meaning, 'en');
+      } else {
+        entry = { who, heard: text, gu: result.text, translit: romanize(result.text), meaning: '' };
+        say(result.text, 'gu');
+      }
+      setTarget(null); // the conversation has moved on
+    } else if (who === 'practice' && state.target) {
+      const attempt = window.toGujaratiScript(text);
+      const { score, words } = window.scoreAttempt(attempt, state.target.gu);
+      entry = {
+        who, heard: attempt, gu: attempt, translit: romanize(attempt),
+        target: state.target.gu, targetTranslit: state.target.translit, score, words,
+      };
+      if (score >= PASS_SCORE) setTarget(null);
+      else say(state.target.gu, 'gu'); // hear it again before retrying
+    } else {
+      // Your reply in Hindi or English (or Gujarati, if you already know how).
+      const result = await translate(text, 'gu');
+      if (result.detected === 'gu') {
+        const meaning = (await translate(text, 'en', 'gu')).text;
+        entry = { who: 'me', heard: text, gu: text, translit: romanize(text), meaning };
+      } else {
+        entry = { who: 'me', heard: text, gu: result.text, translit: romanize(result.text), meaning: '' };
+        setTarget({ gu: result.text, translit: entry.translit });
+        say(result.text, 'gu');
+      }
     }
-    return { original: heard, translated: result.text, translit: romanize(result.text), meaning: '' };
+    entry.id = Date.now() + Math.random().toString(36).slice(2, 6);
+    state.chat.push(entry);
+    if (state.chat.length > HISTORY_LIMIT) state.chat.splice(0, state.chat.length - HISTORY_LIMIT);
+    save('lg.chat', state.chat);
+    if (!state.holding) setStatus(state.listening ? 'Listening to them…' : '');
+    render();
   }
 
-  function fillLive(lines) {
-    els.liveOriginal.textContent = lines.original;
-    els.liveTranslated.textContent = lines.translated;
-    els.liveTranslit.textContent = lines.translit;
-    els.liveMeaning.textContent = lines.meaning;
+  function setTarget(target) {
+    state.target = target;
+    save('lg.target', target);
+    renderCoach();
   }
 
-  // ---- speaking translations aloud ----
-  function speak(text) {
-    if (!els.speakToggle.checked || !('speechSynthesis' in window)) return;
-    const tl = els.targetLang.value;
-    const voice = speechSynthesis.getVoices().find((v) => v.lang.toLowerCase().startsWith(tl));
-    if (!voice) {
-      setStatus(`No ${els.targetLang.selectedOptions[0].text} voice on this phone, so it can't be read aloud.`);
+  // ---- the mic ----
+  const listener = window.createGroqListener({
+    getKey: groqKey,
+    getLanguage: (label) => {
+      if (label === 'practice') return 'gu';
+      if (label === 'them' && theirLanguage() !== 'auto') return theirLanguage();
+      return ''; // let Whisper work it out
+    },
+    onPhrase: (text, label) => handle(text, label),
+    isMuted: () => speaker.isSpeaking(),
+    onLevel: (voice) => {
+      els.listenBtn.classList.toggle('hearing', voice && state.listening && !state.holding);
+      els.meBtn.classList.toggle('hearing', voice && state.holding);
+    },
+    onState: (s) => {
+      if (state.holding) return;
+      if (s === 'transcribing') setStatus('Translating…');
+      else if (state.listening) setStatus('Listening to them…');
+    },
+    onError: (err) => {
+      if (err.status === 401) {
+        setStatus('Groq didn\'t accept your key. Check it under Setup.', true);
+        stopAll();
+      } else if (err.status === 429) {
+        setStatus('Free Groq limit reached for now. Wait a minute and it will carry on.', true);
+      } else {
+        setStatus('Couldn\'t reach Groq. Check your internet connection.', true);
+      }
+    },
+  });
+
+  function needKey() {
+    if (groqKey()) return false;
+    setStatus('Add your free Groq key under Setup first.', true);
+    showSetup(true);
+    return true;
+  }
+
+  async function ensureMic() {
+    if (listener.running) return true;
+    try {
+      await listener.start();
+      keepAwake(true);
+      return true;
+    } catch {
+      setStatus('The microphone is blocked. Allow it in Settings → Safari → Microphone, then try again.', true);
+      return false;
+    }
+  }
+
+  function releaseMicIfIdle() {
+    if (state.listening || state.holding) return;
+    listener.stop();
+    keepAwake(false);
+  }
+
+  function stopAll() {
+    state.listening = false;
+    state.holding = false;
+    listener.setAutoListen(false);
+    listener.holdEnd();
+    releaseMicIfIdle();
+    renderControls();
+  }
+
+  async function toggleListening() {
+    if (state.listening) {
+      state.listening = false;
+      listener.setAutoListen(false);
+      releaseMicIfIdle();
+      setStatus('');
+      renderControls();
       return;
     }
-    const u = new SpeechSynthesisUtterance(text);
-    u.voice = voice;
-    u.lang = voice.lang;
-    speechSynthesis.speak(u);
+    if (needKey()) return;
+    speaker.unlock();
+    state.listening = true;
+    listener.setAutoListen(true);
+    renderControls();
+    if (!(await ensureMic())) { stopAll(); return; }
+    setStatus('Listening to them…');
   }
 
-  // ---- live panel ----
-  let liveTimer = null;
-  let liveAbort = null;
-  let liveText = '';
-
-  function showLive(original) {
-    liveText = original;
-    els.hint.hidden = true;
-    els.liveOriginal.textContent = original;
-    clearTimeout(liveTimer);
-    liveTimer = setTimeout(async () => {
-      liveAbort?.abort();
-      liveAbort = new AbortController();
-      try {
-        const lines = await process(original, liveAbort.signal);
-        if (original !== liveText) return; // a newer partial sentence arrived
-        fillLive(lines);
-      } catch (err) {
-        if (err.name !== 'AbortError') setStatus('Translation failed. Check your internet connection.', true);
-      }
-    }, LIVE_TRANSLATE_DEBOUNCE_MS);
+  // Holding the button records you, whether or not Listen is on.
+  async function holdStart(e) {
+    e.preventDefault();
+    if (state.holding || needKey()) return;
+    state.holding = true;
+    speaker.stop();
+    speaker.unlock();
+    listener.holdStart(state.target ? 'practice' : 'me');
+    renderControls();
+    setStatus(state.target ? 'Say it in Gujarati… let go when you finish.' : 'Speak your reply… let go when you finish.');
+    if (!(await ensureMic())) stopAll();
   }
 
-  function resetLive() {
-    clearTimeout(liveTimer);
-    liveAbort?.abort();
-    liveText = '';
-    fillLive({ original: '', translated: '', translit: '', meaning: '' });
+  function holdEnd() {
+    if (!state.holding) return;
+    state.holding = false;
+    listener.holdEnd();
+    releaseMicIfIdle();
+    setStatus('Translating…');
+    renderControls();
   }
 
-  // ---- finished sentences ----
-  async function commit(original) {
-    original = original.trim();
-    if (!original) return;
+  // Keep the screen on while the mic is in use; iOS stops the mic when it locks.
+  let wakeLock = null;
+  async function keepAwake(on) {
     try {
-      const entry = {
-        id: Date.now() + Math.random().toString(36).slice(2, 6),
-        ...(await process(original)),
-      };
-      state.history.unshift(entry);
-      state.history.length = Math.min(state.history.length, HISTORY_LIMIT);
-      save('lg.history', state.history);
-      render();
-      // Keep the finished sentence visible in the live panel until the next one starts.
-      els.hint.hidden = true;
-      fillLive(entry);
-      liveText = '';
-      setStatus('');
-      speak(entry.translated);
-    } catch {
-      setStatus('Translation failed. Check your internet connection.', true);
-    }
+      if (on && !wakeLock && 'wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      } else if (!on && wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+      }
+    } catch { /* not supported or refused */ }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && listener.running) keepAwake(true);
+  });
+
+  // ---- drawing ----
+  function el(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
   }
 
-  // ---- lists ----
-  function isSaved(entry) {
-    return state.saved.some((s) => s.original === entry.original && s.translated === entry.translated);
+  function isSaved(gu) {
+    return state.saved.some((s) => s.gu === gu);
   }
 
   function toggleSaved(entry) {
-    if (isSaved(entry)) {
-      state.saved = state.saved.filter((s) => !(s.original === entry.original && s.translated === entry.translated));
+    if (isSaved(entry.gu)) {
+      state.saved = state.saved.filter((s) => s.gu !== entry.gu);
     } else {
-      state.saved.unshift({ ...entry });
+      state.saved.unshift({
+        id: entry.id, gu: entry.gu, translit: entry.translit,
+        heard: entry.heard !== entry.gu ? entry.heard : '', meaning: entry.meaning || '',
+      });
     }
     save('lg.saved', state.saved);
     render();
   }
 
-  function renderList(listEl, entries, emptyText) {
-    listEl.replaceChildren();
-    if (!entries.length) {
-      const li = document.createElement('li');
-      li.className = 'empty';
-      li.textContent = emptyText;
-      listEl.append(li);
-      return;
+  function actions(entry) {
+    const box = el('div', 'actions');
+    const sayBtn = el('button', null, '🔊');
+    sayBtn.setAttribute('aria-label', 'Play the Gujarati');
+    sayBtn.onclick = () => play(entry.gu, 'gu');
+    const saved = isSaved(entry.gu);
+    const starBtn = el('button', saved ? 'on' : null, saved ? '★' : '☆');
+    starBtn.setAttribute('aria-label', saved ? 'Remove from saved phrases' : 'Save phrase');
+    starBtn.onclick = () => toggleSaved(entry);
+    box.append(sayBtn, starBtn);
+    return box;
+  }
+
+  function messageEl(entry) {
+    const li = el('li', `msg ${entry.who}`);
+    if (entry.who === 'practice') {
+      const good = entry.score >= PASS_SCORE;
+      li.append(
+        el('p', 'who', 'You tried'),
+        el('p', 'translated', entry.gu),
+        el('p', 'translit', entry.translit),
+        el('p', `score ${good ? 'good' : 'retry'}`,
+          good ? `${entry.score}% match. Well said!` : `${entry.score}% match. Listen and try again.`),
+      );
+      const target = el('p', 'target');
+      for (const w of entry.words) target.append(el('span', w.ok ? 'ok' : 'missed', w.word), ' ');
+      li.append(target, el('p', 'translit', entry.targetTranslit));
+      return li;
     }
-    for (const entry of entries) {
-      const li = document.createElement('li');
-      li.className = 'card';
-      const p = (cls, text) => {
-        const el = document.createElement('p');
-        el.className = cls;
-        el.textContent = text;
-        return el;
-      };
-      const actions = document.createElement('div');
-      actions.className = 'actions';
-      const sayBtn = document.createElement('button');
-      sayBtn.textContent = '🔊';
-      sayBtn.setAttribute('aria-label', 'Read aloud');
-      sayBtn.onclick = () => {
-        const was = els.speakToggle.checked;
-        els.speakToggle.checked = true;
-        speak(entry.translated);
-        els.speakToggle.checked = was;
-      };
-      const starBtn = document.createElement('button');
-      starBtn.textContent = isSaved(entry) ? '★' : '☆';
-      starBtn.classList.toggle('on', isSaved(entry));
-      starBtn.setAttribute('aria-label', 'Save phrase');
-      starBtn.onclick = () => toggleSaved(entry);
-      actions.append(sayBtn, starBtn);
-      li.append(p('original', entry.original), p('translated', entry.translated), p('translit', entry.translit), p('meaning', entry.meaning || ''), actions);
-      listEl.append(li);
+    li.append(el('p', 'who', entry.who === 'them' ? 'They said' : 'You said'));
+    if (entry.heard !== entry.gu) li.append(el('p', 'original', entry.heard));
+    li.append(el('p', 'translated', entry.gu), el('p', 'translit', entry.translit));
+    if (entry.meaning) li.append(el('p', 'meaning', entry.meaning));
+    li.append(actions(entry));
+    return li;
+  }
+
+  function renderCoach() {
+    const t = state.target;
+    els.coach.hidden = !t;
+    if (t) {
+      els.coachGu.textContent = t.gu;
+      els.coachTranslit.textContent = t.translit;
     }
+    renderControls();
+  }
+
+  function renderControls() {
+    els.listenBtn.classList.toggle('on', state.listening);
+    els.listenLabel.textContent = state.listening ? 'Stop listening' : 'Listen to them';
+    els.meBtn.classList.toggle('on', state.holding);
+    els.meBtn.classList.toggle('practice', !!state.target);
+    els.meLabel.textContent = state.target ? 'Hold: say it in Gujarati' : 'Hold: your reply';
   }
 
   function render() {
-    renderList(els.history, state.history, 'Nothing yet. What you hear will show up here.');
-    renderList(els.saved, state.saved, 'Tap ☆ on a phrase to save it for practice.');
-    els.history.hidden = state.tab !== 'history';
+    els.chat.replaceChildren(...state.chat.map(messageEl));
+    els.saved.replaceChildren(...state.saved.map((s) => {
+      const li = el('li', 'msg saved');
+      if (s.heard) li.append(el('p', 'original', s.heard));
+      li.append(el('p', 'translated', s.gu), el('p', 'translit', s.translit));
+      if (s.meaning) li.append(el('p', 'meaning', s.meaning));
+      li.append(actions(s));
+      return li;
+    }));
+    if (!state.saved.length) els.saved.append(el('li', 'empty-note', 'Tap ☆ on a phrase to save it for practice.'));
+    els.chat.hidden = state.tab !== 'chat';
     els.saved.hidden = state.tab !== 'saved';
+    els.empty.hidden = state.tab !== 'chat' || state.chat.length > 0;
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === state.tab));
-  }
-
-  // ---- listening with Groq (handles mixed languages) ----
-  let groq = null;
-  let hearing = false;
-
-  function startGroq() {
-    hearing = false;
-    groq = window.createGroqListener({
-      getKey: groqKey,
-      getLanguage: () => (sourceCode() === 'auto' ? '' : sourceCode()),
-      onPhrase: (text) => commit(text),
-      onLevel: (voice) => {
-        if (voice === hearing) return;
-        hearing = voice;
-        if (voice) setStatus('Hearing speech…');
-      },
-      onState: (s) => {
-        if (!listening) return;
-        setStatus(s === 'transcribing' ? 'Translating…' : 'Listening…');
-      },
-      onError: (err) => {
-        if (err.status === 401) {
-          setStatus('Groq didn\'t accept your key. Check it under Setup.', true);
-          stopListening();
-        } else if (err.status === 429) {
-          setStatus('Free Groq limit reached for now. Wait a minute and it will carry on.', true);
-        } else {
-          setStatus('Couldn\'t reach Groq. Check your internet connection.', true);
-        }
-      },
-    });
-    groq.start().catch(() => {
-      setStatus('The microphone is blocked. Allow it in Settings → Safari → Microphone, then try again.', true);
-      stopListening();
-    });
-  }
-
-  // ---- listening with Safari's built-in recognition (one language) ----
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null;
-  let listening = false;
-  let silenceTimer = null;
-  let pending = '';        // text heard but not yet committed
-  let ignoreResults = false; // set while we force-restart after a silence commit
-
-  function flushPending() {
-    clearTimeout(silenceTimer);
-    const text = pending;
-    pending = '';
-    if (text) commit(text);
-  }
-
-  function startRecognition() {
-    rec = new SpeechRecognition();
-    rec.lang = els.sourceLang.value;
-    rec.continuous = true;
-    rec.interimResults = true;
-
-    rec.onresult = (e) => {
-      if (ignoreResults) return;
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i];
-        if (r.isFinal) {
-          pending = '';
-          clearTimeout(silenceTimer);
-          commit(r[0].transcript);
-        } else {
-          interim += r[0].transcript;
-        }
-      }
-      if (!interim) return;
-      pending = interim;
-      showLive(interim);
-      clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(() => {
-        flushPending();
-        // Restart so the next sentence starts with a clean transcript.
-        ignoreResults = true;
-        try { rec.stop(); } catch { /* already stopped */ }
-      }, SILENCE_MS);
-    };
-
-    rec.onerror = (e) => {
-      if (e.error === 'no-speech' || e.error === 'aborted') return;
-      if (e.error === 'language-not-supported') {
-        setStatus(`This iPhone can't recognise ${els.sourceLang.selectedOptions[0].text} speech. Try another language.`, true);
-      } else if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        setStatus('Microphone or speech recognition is blocked. Allow it in Settings → Safari, then try again.', true);
-      } else {
-        setStatus(`Speech recognition error: ${e.error}`, true);
-      }
-      stopListening();
-    };
-
-    // iOS ends the session after pauses; keep it going until the user stops.
-    rec.onend = () => {
-      ignoreResults = false;
-      if (listening) {
-        try { startRecognition(); } catch { stopListening(); }
-      }
-    };
-
-    rec.start();
-  }
-
-  function startListening() {
-    const useGroq = !!groqKey();
-    if (!useGroq && els.sourceLang.value === 'auto') {
-      setStatus('Mixed languages need a free Groq key. Add one under Setup.', true);
-      showSetup(true);
-      return;
-    }
-    if (!useGroq && !SpeechRecognition) {
-      setStatus('This browser has no speech recognition. On iPhone, open this page in Safari.', true);
-      return;
-    }
-    listening = true;
-    els.micBtn.classList.add('on');
-    els.micBtn.setAttribute('aria-label', 'Stop listening');
-    els.live.classList.add('listening');
-    resetLive();
-    els.hint.hidden = false;
-    els.hint.textContent = 'Listening…';
-    setStatus(useGroq ? 'Listening…' : '');
-    if (useGroq) startGroq(); else startRecognition();
-  }
-
-  function stopListening() {
-    listening = false;
-    els.micBtn.classList.remove('on');
-    els.micBtn.setAttribute('aria-label', 'Start listening');
-    els.live.classList.remove('listening');
-    if (groq) {
-      groq.stop();
-      groq = null;
-      setStatus('');
-      return;
-    }
-    flushPending();
-    try { rec?.stop(); } catch { /* already stopped */ }
+    if (state.tab === 'chat') els.scroller.scrollTop = els.scroller.scrollHeight;
+    renderCoach();
   }
 
   // ---- setup ----
@@ -400,8 +405,8 @@
     els.setup.hidden = !open;
     const key = groqKey();
     els.keyState.textContent = key
-      ? `Key saved (ends in …${key.slice(-4)}). Mixed-language listening is on.`
-      : 'No key yet. Without one, the app uses Safari\'s listening, which only understands one language at a time.';
+      ? `Key saved (ends in …${key.slice(-4)}).`
+      : 'No key yet. The app needs one to listen.';
   }
 
   // ---- wiring ----
@@ -411,35 +416,38 @@
     const key = els.keyInput.value.trim();
     els.keyInput.value = '';
     save('lg.groqKey', key);
-    setStatus(key ? 'Key saved. Tap the mic to start.' : 'Key removed.');
+    setStatus(key ? 'Key saved. Tap "Listen to them" to start.' : 'Key removed.');
     showSetup(!key);
   };
 
-  els.micBtn.onclick = () => (listening ? stopListening() : startListening());
+  els.listenBtn.onclick = toggleListening;
+  els.meBtn.addEventListener('pointerdown', holdStart);
+  for (const type of ['pointerup', 'pointercancel', 'pointerleave']) els.meBtn.addEventListener(type, holdEnd);
+  els.meBtn.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  els.sourceLang.onchange = () => {
+  els.coachSay.onclick = () => play(state.target.gu, 'gu');
+  els.coachSkip.onclick = () => setTarget(null);
+
+  els.sourceLang.onchange = savePrefs;
+  els.speakToggle.onchange = () => {
     savePrefs();
-    if (listening) { stopListening(); startListening(); }
+    if (!els.speakToggle.checked) speaker.stop();
   };
-  els.targetLang.onchange = () => {
-    savePrefs();
-    els.liveTranslated.lang = els.targetLang.value;
-  };
-  els.speakToggle.onchange = savePrefs;
 
   els.typeForm.onsubmit = (e) => {
     e.preventDefault();
+    speaker.unlock();
     const text = els.typeInput.value;
     els.typeInput.value = '';
-    commit(text);
+    // Gujarati typed while practising counts as a practice attempt.
+    handle(text, state.target && /[઀-૿]/.test(text) ? 'practice' : 'me');
   };
 
   els.clearBtn.onclick = () => {
     if (!confirm('Clear the conversation? Saved phrases are kept.')) return;
-    state.history = [];
-    save('lg.history', state.history);
-    resetLive();
-    els.hint.hidden = false;
+    state.chat = [];
+    save('lg.chat', state.chat);
+    setTarget(null);
     render();
   };
 
@@ -447,8 +455,6 @@
     t.onclick = () => { state.tab = t.dataset.tab; render(); };
   });
 
-  // Voices load asynchronously on some browsers.
-  if ('speechSynthesis' in window) speechSynthesis.getVoices();
-
+  if (!groqKey()) showSetup(true);
   render();
 })();
